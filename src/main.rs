@@ -15,6 +15,36 @@ use image::{RgbImage, Rgb};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use material::{Lambertian, Metal, Dielectric};
+use clap::Parser;
+
+/// Simple CLI for the ray tracer
+#[derive(Parser, Debug)]
+#[command(author, version, about = "A tiny ray tracer", long_about = None)]
+struct Cli {
+    /// Image width in pixels
+    #[arg(short, long, default_value_t = 400)]
+    width: u32,
+
+    /// Image height in pixels. If omitted, height is computed from aspect ratio
+    #[arg(short, long)]
+    height: Option<u32>,
+
+    /// Samples per pixel
+    #[arg(short = 's', long, default_value_t = 50)]
+    samples: u32,
+
+    /// Max recursion depth
+    #[arg(short = 'd', long, default_value_t = 10)]
+    max_depth: u32,
+
+    /// Output filename
+    #[arg(short, long, default_value = "render.png")]
+    output: String,
+
+    /// Number of threads to use (optional)
+    #[arg(long)]
+    threads: Option<usize>,
+}
 
 fn ray_color(r: &Ray, world: &HittableList, depth: u32) -> Color {
     if depth == 0 {
@@ -34,12 +64,29 @@ fn ray_color(r: &Ray, world: &HittableList, depth: u32) -> Color {
 }
 
 fn main() {
+    // Parse CLI
+    let cli = Cli::parse();
+
     // Image
     let aspect_ratio = 16.0 / 9.0;
-    let image_width: u32 = 400;
-    let image_height: u32 = (image_width as f64 / aspect_ratio) as u32;
-    let samples_per_pixel = 5000;
-    let max_depth = 10;
+    let image_width: u32 = cli.width;
+    let image_height: u32 = match cli.height {
+        Some(h) => h,
+        None => (image_width as f64 / aspect_ratio) as u32,
+    };
+    let samples_per_pixel = cli.samples;
+    let max_depth = cli.max_depth;
+    let output_file = cli.output;
+
+    // Optional thread control
+    if let Some(n) = cli.threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global()
+            .expect("Failed to build rayon thread pool");
+    }
+
+    println!("Rendering {w}x{h}, {s} spp, max depth {d} -> {out}", w = image_width, h = image_height, s = samples_per_pixel, d = max_depth, out = output_file);
 
     // World
     let mut world = HittableList::new();
@@ -98,6 +145,6 @@ fn main() {
     bar.finish_with_message("done");
 
     // Save
-    imgbuf.save("render.png").expect("Failed to save image");
-    println!("Wrote render.png ({width}x{height})", width = image_width, height = image_height);
+    imgbuf.save(&output_file).expect("Failed to save image");
+    println!("Wrote {out} ({width}x{height})", out = output_file, width = image_width, height = image_height);
 }
