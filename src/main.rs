@@ -16,6 +16,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use material::{Lambertian, Metal, Dielectric};
 use clap::Parser;
+use image::imageops::FilterType;
 
 /// Simple CLI for the ray tracer
 #[derive(Parser, Debug)]
@@ -44,6 +45,19 @@ struct Cli {
     /// Number of threads to use (optional)
     #[arg(long)]
     threads: Option<usize>,
+
+    /// Optional input image to overlay or use as background (PNG/JPG/etc)
+    #[arg(long)]
+    input: Option<String>,
+
+    /// Blend the input image with the render (50/50) instead of replacing pixels
+    #[arg(long, default_value_t = false)]
+    blend: bool,
+
+    /// Manually set pixel(s) as `x,y,r,g,b`. Can be provided multiple times.
+    /// Example: --set-pixel 10,20,255,0,0
+    #[arg(long = "set-pixel")]
+    set_pixel: Vec<String>,
 }
 
 fn ray_color(r: &Ray, world: &HittableList, depth: u32) -> Color {
@@ -143,6 +157,59 @@ fn main() {
     }
 
     bar.finish_with_message("done");
+
+    // If an input image was provided, overlay or blend it into the final image
+    if let Some(input_path) = &cli.input {
+        match image::open(input_path) {
+            Ok(img) => {
+                let img = img.to_rgb8();
+                let resized = image::imageops::resize(&img, image_width, image_height, FilterType::Lanczos3);
+                if cli.blend {
+                    for y in 0..image_height {
+                        for x in 0..image_width {
+                            let base = imgbuf.get_pixel(x, y).0;
+                            let src = resized.get_pixel(x, y).0;
+                            let blended = [
+                                ((base[0] as u16 + src[0] as u16) / 2) as u8,
+                                ((base[1] as u16 + src[1] as u16) / 2) as u8,
+                                ((base[2] as u16 + src[2] as u16) / 2) as u8,
+                            ];
+                            imgbuf.put_pixel(x, y, Rgb(blended));
+                        }
+                    }
+                } else {
+                    // Replace pixels with input image
+                    for y in 0..image_height {
+                        for x in 0..image_width {
+                            let src = resized.get_pixel(x, y);
+                            imgbuf.put_pixel(x, y, *src);
+                        }
+                    }
+                }
+            }
+            Err(e) => eprintln!("Failed to open input image {}: {}", input_path, e),
+        }
+    }
+
+    // Apply any --set-pixel edits (format: x,y,r,g,b) - origin at top-left (0,0)
+    for spec in &cli.set_pixel {
+        let parts: Vec<&str> = spec.split(',').map(|s| s.trim()).collect();
+        if parts.len() != 5 {
+            eprintln!("Ignored --set-pixel '{}': expected 5 comma-separated values", spec);
+            continue;
+        }
+        let parse_u32 = |s: &str| s.parse::<u32>().ok();
+        let parse_u8 = |s: &str| s.parse::<u8>().ok();
+        if let (Some(x), Some(y), Some(r), Some(g), Some(b)) = (parse_u32(parts[0]), parse_u32(parts[1]), parse_u8(parts[2]), parse_u8(parts[3]), parse_u8(parts[4])) {
+            if x < image_width && y < image_height {
+                imgbuf.put_pixel(x, y, Rgb([r, g, b]));
+            } else {
+                eprintln!("Ignored --set-pixel '{}': coordinates out of bounds", spec);
+            }
+        } else {
+            eprintln!("Ignored --set-pixel '{}': could not parse numbers", spec);
+        }
+    }
 
     // Save
     imgbuf.save(&output_file).expect("Failed to save image");
